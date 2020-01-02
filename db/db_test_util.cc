@@ -10,6 +10,7 @@
 #include "db/db_test_util.h"
 #include "db/forward_iterator.h"
 #include "rocksdb/env_encryption.h"
+#include "rocksdb/utilities/object_registry.h"
 
 namespace rocksdb {
 
@@ -47,20 +48,30 @@ ROT13BlockCipher rot13Cipher_(16);
 #endif  // ROCKSDB_LITE
 
 DBTestBase::DBTestBase(const std::string path)
-    : mem_env_(!getenv("MEM_ENV") ? nullptr : new MockEnv(Env::Default())),
+    : mem_env_(nullptr), encrypted_env_(nullptr), option_config_(kDefault) {
+  Env* base_env = Env::Default();
 #ifndef ROCKSDB_LITE
-      encrypted_env_(
-          !getenv("ENCRYPTED_ENV")
-              ? nullptr
-              : NewEncryptedEnv(mem_env_ ? mem_env_ : Env::Default(),
-                                new CTREncryptionProvider(rot13Cipher_))),
-#else
-      encrypted_env_(nullptr),
-#endif  // ROCKSDB_LITE
-      env_(new SpecialEnv(encrypted_env_
-                              ? encrypted_env_
-                              : (mem_env_ ? mem_env_ : Env::Default()))),
-      option_config_(kDefault) {
+  const char* test_env_uri = getenv("TEST_ENV_URI");
+  if (test_env_uri) {
+    Env* test_env = nullptr;
+    Status s = Env::LoadEnv(test_env_uri, &test_env, &env_guard_);
+    base_env = test_env;
+    EXPECT_OK(s);
+    EXPECT_NE(Env::Default(), base_env);
+  }
+#endif  // !ROCKSDB_LITE
+  EXPECT_NE(nullptr, base_env);
+  if (getenv("MEM_ENV")) {
+    mem_env_ = new MockEnv(base_env);
+  }
+#ifndef ROCKSDB_LITE
+  if (getenv("ENCRYPTED_ENV")) {
+    encrypted_env_ = NewEncryptedEnv(mem_env_ ? mem_env_ : base_env,
+                                     new CTREncryptionProvider(rot13Cipher_));
+  }
+#endif  // !ROCKSDB_LITE
+  env_ = new SpecialEnv(encrypted_env_ ? encrypted_env_
+                                       : (mem_env_ ? mem_env_ : base_env));
   env_->SetBackgroundThreads(1, Env::LOW);
   env_->SetBackgroundThreads(1, Env::HIGH);
   dbname_ = test::PerThreadDBPath(env_, path);
@@ -101,18 +112,18 @@ DBTestBase::~DBTestBase() {
 bool DBTestBase::ShouldSkipOptions(int option_config, int skip_mask) {
 #ifdef ROCKSDB_LITE
     // These options are not supported in ROCKSDB_LITE
-  if (option_config == kHashSkipList ||
-      option_config == kPlainTableFirstBytePrefix ||
-      option_config == kPlainTableCappedPrefix ||
-      option_config == kPlainTableCappedPrefixNonMmap ||
-      option_config == kPlainTableAllBytesPrefix ||
-      option_config == kVectorRep || option_config == kHashLinkList ||
-      option_config == kHashCuckoo || option_config == kUniversalCompaction ||
-      option_config == kUniversalCompactionMultiLevel ||
-      option_config == kUniversalSubcompactions ||
-      option_config == kFIFOCompaction ||
-      option_config == kConcurrentSkipList) {
-    return true;
+    if (option_config == kHashSkipList ||
+        option_config == kPlainTableFirstBytePrefix ||
+        option_config == kPlainTableCappedPrefix ||
+        option_config == kPlainTableCappedPrefixNonMmap ||
+        option_config == kPlainTableAllBytesPrefix ||
+        option_config == kVectorRep || option_config == kHashLinkList ||
+        option_config == kUniversalCompaction ||
+        option_config == kUniversalCompactionMultiLevel ||
+        option_config == kUniversalSubcompactions ||
+        option_config == kFIFOCompaction ||
+        option_config == kConcurrentSkipList) {
+      return true;
     }
 #endif
 
@@ -139,9 +150,6 @@ bool DBTestBase::ShouldSkipOptions(int option_config, int skip_mask) {
     if ((skip_mask & kSkipHashIndex) &&
         (option_config == kBlockBasedTableWithPrefixHashIndex ||
          option_config == kBlockBasedTableWithWholeKeyHashIndex)) {
-      return true;
-    }
-    if ((skip_mask & kSkipHashCuckoo) && (option_config == kHashCuckoo)) {
       return true;
     }
     if ((skip_mask & kSkipFIFOCompaction) && option_config == kFIFOCompaction) {
@@ -344,6 +352,7 @@ Options DBTestBase::GetOptions(
       options.prefix_extractor.reset(NewFixedPrefixTransform(1));
       options.memtable_factory.reset(NewHashSkipListRepFactory(16));
       options.allow_concurrent_memtable_write = false;
+      options.unordered_write = false;
       break;
     case kPlainTableFirstBytePrefix:
       options.table_factory.reset(new PlainTableFactory());
@@ -376,17 +385,14 @@ Options DBTestBase::GetOptions(
     case kVectorRep:
       options.memtable_factory.reset(new VectorRepFactory(100));
       options.allow_concurrent_memtable_write = false;
+      options.unordered_write = false;
       break;
     case kHashLinkList:
       options.prefix_extractor.reset(NewFixedPrefixTransform(1));
       options.memtable_factory.reset(
           NewHashLinkListRepFactory(4, 0, 3, true, 4));
       options.allow_concurrent_memtable_write = false;
-      break;
-    case kHashCuckoo:
-      options.memtable_factory.reset(
-          NewHashCuckooRepFactory(options.write_buffer_size));
-      options.allow_concurrent_memtable_write = false;
+      options.unordered_write = false;
       break;
       case kDirectIO: {
         options.use_direct_reads = true;
@@ -548,6 +554,11 @@ Options DBTestBase::GetOptions(
       options.manual_wal_flush = true;
       break;
     }
+    case kUnorderedWrite: {
+      options.allow_concurrent_memtable_write = false;
+      options.unordered_write = false;
+      break;
+    }
 
     default:
       break;
@@ -573,7 +584,8 @@ void DBTestBase::CreateColumnFamilies(const std::vector<std::string>& cfs,
   size_t cfi = handles_.size();
   handles_.resize(cfi + cfs.size());
   for (auto cf : cfs) {
-    ASSERT_OK(db_->CreateColumnFamily(cf_opts, cf, &handles_[cfi++]));
+    Status s = db_->CreateColumnFamily(cf_opts, cf, &handles_[cfi++]);
+    ASSERT_OK(s);
   }
 }
 
@@ -765,7 +777,8 @@ std::string DBTestBase::Get(int cf, const std::string& k,
 
 std::vector<std::string> DBTestBase::MultiGet(std::vector<int> cfs,
                                               const std::vector<std::string>& k,
-                                              const Snapshot* snapshot) {
+                                              const Snapshot* snapshot,
+                                              const bool batched) {
   ReadOptions options;
   options.verify_checksums = true;
   options.snapshot = snapshot;
@@ -777,12 +790,58 @@ std::vector<std::string> DBTestBase::MultiGet(std::vector<int> cfs,
     handles.push_back(handles_[cfs[i]]);
     keys.push_back(k[i]);
   }
-  std::vector<Status> s = db_->MultiGet(options, handles, keys, &result);
-  for (unsigned int i = 0; i < s.size(); ++i) {
-    if (s[i].IsNotFound()) {
+  std::vector<Status> s;
+  if (!batched) {
+    s = db_->MultiGet(options, handles, keys, &result);
+    for (unsigned int i = 0; i < s.size(); ++i) {
+      if (s[i].IsNotFound()) {
+        result[i] = "NOT_FOUND";
+      } else if (!s[i].ok()) {
+        result[i] = s[i].ToString();
+      }
+    }
+  } else {
+    std::vector<PinnableSlice> pin_values(cfs.size());
+    result.resize(cfs.size());
+    s.resize(cfs.size());
+    db_->MultiGet(options, cfs.size(), handles.data(), keys.data(),
+                  pin_values.data(), s.data());
+    for (unsigned int i = 0; i < s.size(); ++i) {
+      if (s[i].IsNotFound()) {
+        result[i] = "NOT_FOUND";
+      } else if (!s[i].ok()) {
+        result[i] = s[i].ToString();
+      } else {
+        result[i].assign(pin_values[i].data(), pin_values[i].size());
+      }
+    }
+  }
+  return result;
+}
+
+std::vector<std::string> DBTestBase::MultiGet(const std::vector<std::string>& k,
+                                              const Snapshot* snapshot) {
+  ReadOptions options;
+  options.verify_checksums = true;
+  options.snapshot = snapshot;
+  std::vector<Slice> keys;
+  std::vector<std::string> result;
+  std::vector<Status> statuses(k.size());
+  std::vector<PinnableSlice> pin_values(k.size());
+
+  for (unsigned int i = 0; i < k.size(); ++i) {
+    keys.push_back(k[i]);
+  }
+  db_->MultiGet(options, dbfull()->DefaultColumnFamily(), keys.size(),
+                keys.data(), pin_values.data(), statuses.data());
+  result.resize(k.size());
+  for (auto iter = result.begin(); iter != result.end(); ++iter) {
+    iter->assign(pin_values[iter - result.begin()].data(),
+                 pin_values[iter - result.begin()].size());
+  }
+  for (unsigned int i = 0; i < statuses.size(); ++i) {
+    if (statuses[i].IsNotFound()) {
       result[i] = "NOT_FOUND";
-    } else if (!s[i].ok()) {
-      result[i] = s[i].ToString();
     }
   }
   return result;

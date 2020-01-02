@@ -19,8 +19,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class ColumnFamilyOptionsTest {
 
   @ClassRule
-  public static final RocksMemoryResource rocksMemoryResource =
-      new RocksMemoryResource();
+  public static final RocksNativeLibraryResource ROCKS_NATIVE_LIBRARY_RESOURCE =
+      new RocksNativeLibraryResource();
 
   public static final Random rand = PlatformRandomHelper.
       getPlatformSpecificRandomFactory();
@@ -465,6 +465,23 @@ public class ColumnFamilyOptionsTest {
   }
 
   @Test
+  public void bottommostCompressionOptions() {
+    try (final ColumnFamilyOptions columnFamilyOptions =
+             new ColumnFamilyOptions();
+         final CompressionOptions bottommostCompressionOptions =
+             new CompressionOptions()
+                 .setMaxDictBytes(123)) {
+
+      columnFamilyOptions.setBottommostCompressionOptions(
+          bottommostCompressionOptions);
+      assertThat(columnFamilyOptions.bottommostCompressionOptions())
+          .isEqualTo(bottommostCompressionOptions);
+      assertThat(columnFamilyOptions.bottommostCompressionOptions()
+          .maxDictBytes()).isEqualTo(123);
+    }
+  }
+
+  @Test
   public void compressionOptions() {
     try (final ColumnFamilyOptions columnFamilyOptions
              = new ColumnFamilyOptions();
@@ -539,6 +556,15 @@ public class ColumnFamilyOptionsTest {
       opt.setReportBgIoStats(booleanValue);
       assertThat(opt.reportBgIoStats()).
           isEqualTo(booleanValue);
+    }
+  }
+
+  @Test
+  public void ttl() {
+    try (final ColumnFamilyOptions options = new ColumnFamilyOptions()) {
+      options.setTtl(1000 * 60);
+      assertThat(options.ttl()).
+          isEqualTo(1000 * 60);
     }
   }
 

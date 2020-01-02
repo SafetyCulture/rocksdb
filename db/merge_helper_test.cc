@@ -9,9 +9,9 @@
 
 #include "db/merge_helper.h"
 #include "rocksdb/comparator.h"
+#include "test_util/testharness.h"
+#include "test_util/testutil.h"
 #include "util/coding.h"
-#include "util/testharness.h"
-#include "util/testutil.h"
 #include "utilities/merge_operators.h"
 
 namespace rocksdb {
@@ -20,7 +20,7 @@ class MergeHelperTest : public testing::Test {
  public:
   MergeHelperTest() { env_ = Env::Default(); }
 
-  ~MergeHelperTest() = default;
+  ~MergeHelperTest() override = default;
 
   Status Run(SequenceNumber stop_before, bool at_bottom,
              SequenceNumber latest_snapshot = 0) {

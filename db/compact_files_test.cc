@@ -10,13 +10,13 @@
 #include <thread>
 #include <vector>
 
-#include "db/db_impl.h"
+#include "db/db_impl/db_impl.h"
 #include "port/port.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
+#include "test_util/sync_point.h"
+#include "test_util/testharness.h"
 #include "util/string_util.h"
-#include "util/sync_point.h"
-#include "util/testharness.h"
 
 namespace rocksdb {
 
@@ -35,9 +35,9 @@ class CompactFilesTest : public testing::Test {
 class FlushedFileCollector : public EventListener {
  public:
   FlushedFileCollector() {}
-  ~FlushedFileCollector() {}
+  ~FlushedFileCollector() override {}
 
-  virtual void OnFlushCompleted(DB* /*db*/, const FlushJobInfo& info) override {
+  void OnFlushCompleted(DB* /*db*/, const FlushJobInfo& info) override {
     std::lock_guard<std::mutex> lock(mutex_);
     flushed_files_.push_back(info.file_path);
   }
@@ -256,9 +256,9 @@ TEST_F(CompactFilesTest, CapturingPendingFiles) {
 TEST_F(CompactFilesTest, CompactionFilterWithGetSv) {
   class FilterWithGet : public CompactionFilter {
    public:
-    virtual bool Filter(int /*level*/, const Slice& /*key*/,
-                        const Slice& /*value*/, std::string* /*new_value*/,
-                        bool* /*value_changed*/) const override {
+    bool Filter(int /*level*/, const Slice& /*key*/, const Slice& /*value*/,
+                std::string* /*new_value*/,
+                bool* /*value_changed*/) const override {
       if (db_ == nullptr) {
         return true;
       }
@@ -271,7 +271,7 @@ TEST_F(CompactFilesTest, CompactionFilterWithGetSv) {
       db_ = db;
     }
 
-    virtual const char* Name() const override { return "FilterWithGet"; }
+    const char* Name() const override { return "FilterWithGet"; }
 
    private:
     DB* db_;
@@ -387,7 +387,7 @@ TEST_F(CompactFilesTest, GetCompactionJobInfo) {
   auto l0_files_1 = collector->GetFlushedFiles();
   CompactionOptions co;
   co.compression = CompressionType::kLZ4Compression;
-  CompactionJobInfo compaction_job_info;
+  CompactionJobInfo compaction_job_info{};
   ASSERT_OK(
       db->CompactFiles(co, l0_files_1, 0, -1, nullptr, &compaction_job_info));
   ASSERT_EQ(compaction_job_info.base_input_level, 0);
