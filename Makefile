@@ -2008,14 +2008,14 @@ MIN_IOSVERSION=11.0
 	mkdir -p ios-x86/$(dir $@)
 	$(CXX) $(CXXFLAGS) -isysroot $(SIMULATORROOT)/SDKs/iPhoneSimulator$(IOSVERSION).sdk -miphoneos-version-min=$(MIN_IOSVERSION) -arch x86_64 -c $< -o ios-x86/$@
 	mkdir -p ios-arm/$(dir $@)
-	xcrun -sdk iphoneos $(CXX) $(CXXFLAGS) -isysroot $(DEVICEROOT)/SDKs/iPhoneOS$(IOSVERSION).sdk -miphoneos-version-min=$(MIN_IOSVERSION) -arch arm64 -c $< -o ios-arm/$@
+	xcrun -sdk iphoneos $(CXX) $(CXXFLAGS) -fembed-bitcode -isysroot $(DEVICEROOT)/SDKs/iPhoneOS$(IOSVERSION).sdk -miphoneos-version-min=$(MIN_IOSVERSION) -arch arm64 -c $< -o ios-arm/$@
 	lipo ios-x86/$@ ios-arm/$@ -create -output $@
 
 .c.o:
 	mkdir -p ios-x86/$(dir $@)
 	$(CC) $(CFLAGS) -isysroot $(SIMULATORROOT)/SDKs/iPhoneSimulator$(IOSVERSION).sdk -miphoneos-version-min=$(MIN_IOSVERSION) -arch x86_64 -c $< -o ios-x86/$@
 	mkdir -p ios-arm/$(dir $@)
-	xcrun -sdk iphoneos $(CC) $(CFLAGS) -isysroot $(DEVICEROOT)/SDKs/iPhoneOS$(IOSVERSION).sdk -miphoneos-version-min=$(MIN_IOSVERSION) -arch arm64 -c $< -o ios-arm/$@
+	xcrun -sdk iphoneos $(CC) $(CFLAGS) -fembed-bitcode -isysroot $(DEVICEROOT)/SDKs/iPhoneOS$(IOSVERSION).sdk -miphoneos-version-min=$(MIN_IOSVERSION) -arch arm64 -c $< -o ios-arm/$@
 	lipo ios-x86/$@ ios-arm/$@ -create -output $@
 
 else
