@@ -3,7 +3,7 @@
 //  COPYING file in the root directory) and Apache 2.0 License
 //  (found in the LICENSE.Apache file in the root directory).
 
-#include "db/blob_index.h"
+#include "db/blob/blob_index.h"
 #include "db/db_impl/db_impl.h"
 #include "db/db_test_util.h"
 #include "db/dbformat.h"
@@ -37,7 +37,7 @@
 
 #ifndef ROCKSDB_LITE
 
-namespace rocksdb {
+namespace ROCKSDB_NAMESPACE {
 
 class EventListenerTest : public DBTestBase {
  public:
@@ -54,24 +54,27 @@ class EventListenerTest : public DBTestBase {
   const size_t k110KB = 110 << 10;
 };
 
-struct TestPropertiesCollector : public rocksdb::TablePropertiesCollector {
-  rocksdb::Status AddUserKey(const rocksdb::Slice& /*key*/,
-                             const rocksdb::Slice& /*value*/,
-                             rocksdb::EntryType /*type*/,
-                             rocksdb::SequenceNumber /*seq*/,
-                             uint64_t /*file_size*/) override {
+struct TestPropertiesCollector
+    : public ROCKSDB_NAMESPACE::TablePropertiesCollector {
+  ROCKSDB_NAMESPACE::Status AddUserKey(
+      const ROCKSDB_NAMESPACE::Slice& /*key*/,
+      const ROCKSDB_NAMESPACE::Slice& /*value*/,
+      ROCKSDB_NAMESPACE::EntryType /*type*/,
+      ROCKSDB_NAMESPACE::SequenceNumber /*seq*/,
+      uint64_t /*file_size*/) override {
     return Status::OK();
   }
-  rocksdb::Status Finish(
-      rocksdb::UserCollectedProperties* properties) override {
+  ROCKSDB_NAMESPACE::Status Finish(
+      ROCKSDB_NAMESPACE::UserCollectedProperties* properties) override {
     properties->insert({"0", "1"});
     return Status::OK();
   }
 
   const char* Name() const override { return "TestTablePropertiesCollector"; }
 
-  rocksdb::UserCollectedProperties GetReadableProperties() const override {
-    rocksdb::UserCollectedProperties ret;
+  ROCKSDB_NAMESPACE::UserCollectedProperties GetReadableProperties()
+      const override {
+    ROCKSDB_NAMESPACE::UserCollectedProperties ret;
     ret["2"] = "3";
     return ret;
   }
@@ -433,7 +436,7 @@ TEST_F(EventListenerTest, MultiDBMultiListeners) {
   for (size_t c = 0; c < cf_names.size(); ++c) {
     for (int d = 0; d < kNumDBs; ++d) {
       ASSERT_OK(dbs[d]->Flush(FlushOptions(), vec_handles[d][c]));
-      reinterpret_cast<DBImpl*>(dbs[d])->TEST_WaitForFlushMemTable();
+      static_cast_with_check<DBImpl>(dbs[d])->TEST_WaitForFlushMemTable();
     }
   }
 
@@ -912,10 +915,10 @@ TEST_F(EventListenerTest, BackgroundErrorListenerFailedFlushTest) {
 
   // the usual TEST_WaitForFlushMemTable() doesn't work for failed flushes, so
   // forge a custom one for the failed flush case.
-  rocksdb::SyncPoint::GetInstance()->LoadDependency(
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->LoadDependency(
       {{"DBImpl::BGWorkFlush:done",
         "EventListenerTest:BackgroundErrorListenerFailedFlushTest:1"}});
-  rocksdb::SyncPoint::GetInstance()->EnableProcessing();
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
 
   env_->drop_writes_.store(true, std::memory_order_release);
   env_->no_slowdown_ = true;
@@ -974,6 +977,14 @@ class TestFileOperationListener : public EventListener {
     file_reads_success_.store(0);
     file_writes_.store(0);
     file_writes_success_.store(0);
+    file_flushes_.store(0);
+    file_flushes_success_.store(0);
+    file_closes_.store(0);
+    file_closes_success_.store(0);
+    file_syncs_.store(0);
+    file_syncs_success_.store(0);
+    file_truncates_.store(0);
+    file_truncates_success_.store(0);
   }
 
   void OnFileReadFinish(const FileOperationInfo& info) override {
@@ -992,12 +1003,52 @@ class TestFileOperationListener : public EventListener {
     ReportDuration(info);
   }
 
+  void OnFileFlushFinish(const FileOperationInfo& info) override {
+    ++file_flushes_;
+    if (info.status.ok()) {
+      ++file_flushes_success_;
+    }
+    ReportDuration(info);
+  }
+
+  void OnFileCloseFinish(const FileOperationInfo& info) override {
+    ++file_closes_;
+    if (info.status.ok()) {
+      ++file_closes_success_;
+    }
+    ReportDuration(info);
+  }
+
+  void OnFileSyncFinish(const FileOperationInfo& info) override {
+    ++file_syncs_;
+    if (info.status.ok()) {
+      ++file_syncs_success_;
+    }
+    ReportDuration(info);
+  }
+
+  void OnFileTruncateFinish(const FileOperationInfo& info) override {
+    ++file_truncates_;
+    if (info.status.ok()) {
+      ++file_truncates_success_;
+    }
+    ReportDuration(info);
+  }
+
   bool ShouldBeNotifiedOnFileIO() override { return true; }
 
   std::atomic<size_t> file_reads_;
   std::atomic<size_t> file_reads_success_;
   std::atomic<size_t> file_writes_;
   std::atomic<size_t> file_writes_success_;
+  std::atomic<size_t> file_flushes_;
+  std::atomic<size_t> file_flushes_success_;
+  std::atomic<size_t> file_closes_;
+  std::atomic<size_t> file_closes_success_;
+  std::atomic<size_t> file_syncs_;
+  std::atomic<size_t> file_syncs_success_;
+  std::atomic<size_t> file_truncates_;
+  std::atomic<size_t> file_truncates_success_;
 
  private:
   void ReportDuration(const FileOperationInfo& info) const {
@@ -1015,6 +1066,13 @@ TEST_F(EventListenerTest, OnFileOperationTest) {
   TestFileOperationListener* listener = new TestFileOperationListener();
   options.listeners.emplace_back(listener);
 
+  options.use_direct_io_for_flush_and_compaction = true;
+  Status s = TryReopen(options);
+  if (s.IsInvalidArgument()) {
+    options.use_direct_io_for_flush_and_compaction = false;
+  } else {
+    ASSERT_OK(s);
+  }
   DestroyAndReopen(options);
   ASSERT_OK(Put("foo", "aaa"));
   dbfull()->Flush(FlushOptions());
@@ -1022,14 +1080,27 @@ TEST_F(EventListenerTest, OnFileOperationTest) {
   ASSERT_GE(listener->file_writes_.load(),
             listener->file_writes_success_.load());
   ASSERT_GT(listener->file_writes_.load(), 0);
+  ASSERT_GE(listener->file_flushes_.load(),
+            listener->file_flushes_success_.load());
+  ASSERT_GT(listener->file_flushes_.load(), 0);
   Close();
 
   Reopen(options);
   ASSERT_GE(listener->file_reads_.load(), listener->file_reads_success_.load());
   ASSERT_GT(listener->file_reads_.load(), 0);
+  ASSERT_GE(listener->file_closes_.load(),
+            listener->file_closes_success_.load());
+  ASSERT_GT(listener->file_closes_.load(), 0);
+  ASSERT_GE(listener->file_syncs_.load(), listener->file_syncs_success_.load());
+  ASSERT_GT(listener->file_syncs_.load(), 0);
+  if (true == options.use_direct_io_for_flush_and_compaction) {
+    ASSERT_GE(listener->file_truncates_.load(),
+              listener->file_truncates_success_.load());
+    ASSERT_GT(listener->file_truncates_.load(), 0);
+  }
 }
 
-}  // namespace rocksdb
+}  // namespace ROCKSDB_NAMESPACE
 
 #endif  // ROCKSDB_LITE
 

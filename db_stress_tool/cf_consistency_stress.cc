@@ -9,8 +9,9 @@
 
 #ifdef GFLAGS
 #include "db_stress_tool/db_stress_common.h"
+#include "file/file_util.h"
 
-namespace rocksdb {
+namespace ROCKSDB_NAMESPACE {
 class CfConsistencyStressTest : public StressTest {
  public:
   CfConsistencyStressTest() : batch_id_(0) {}
@@ -184,6 +185,7 @@ class CfConsistencyStressTest : public StressTest {
       db_->ReleaseSnapshot(snapshot);
     }
     if (!is_consistent) {
+      fprintf(stderr, "TestGet error: is_consistent is false\n");
       thread->stats.AddErrors(1);
       // Fail fast to preserve the DB state.
       thread->shared->SetVerificationFailure();
@@ -192,6 +194,7 @@ class CfConsistencyStressTest : public StressTest {
     } else if (s.IsNotFound()) {
       thread->stats.AddGets(1, 0);
     } else {
+      fprintf(stderr, "TestGet error: %s\n", s.ToString().c_str());
       thread->stats.AddErrors(1);
     }
     return s;
@@ -225,6 +228,7 @@ class CfConsistencyStressTest : public StressTest {
         thread->stats.AddGets(1, 0);
       } else {
         // errors case
+        fprintf(stderr, "MultiGet error: %s\n", s.ToString().c_str());
         thread->stats.AddErrors(1);
       }
     }
@@ -244,7 +248,9 @@ class CfConsistencyStressTest : public StressTest {
     std::string upper_bound;
     Slice ub_slice;
     ReadOptions ro_copy = readoptions;
-    if (thread->rand.OneIn(2) && GetNextPrefix(prefix, &upper_bound)) {
+    // Get the next prefix first and then see if we want to set upper bound.
+    // We'll use the next prefix in an assertion later on
+    if (GetNextPrefix(prefix, &upper_bound) && thread->rand.OneIn(2)) {
       ub_slice = Slice(upper_bound);
       ro_copy.iterate_upper_bound = &ub_slice;
     }
@@ -252,17 +258,18 @@ class CfConsistencyStressTest : public StressTest {
         column_families_[rand_column_families[thread->rand.Next() %
                                               rand_column_families.size()]];
     Iterator* iter = db_->NewIterator(ro_copy, cfh);
-    long count = 0;
+    unsigned long count = 0;
     for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix);
          iter->Next()) {
       ++count;
     }
     assert(prefix_to_use == 0 ||
-           count <= (static_cast<long>(1) << ((8 - prefix_to_use) * 8)));
+           count <= GetPrefixKeyCount(prefix.ToString(), upper_bound));
     Status s = iter->status();
     if (s.ok()) {
       thread->stats.AddPrefixes(1, count);
     } else {
+      fprintf(stderr, "TestPrefixScan error: %s\n", s.ToString().c_str());
       thread->stats.AddErrors(1);
     }
     delete iter;
@@ -298,10 +305,34 @@ class CfConsistencyStressTest : public StressTest {
     opt_copy.env = db_stress_env->target();
     DestroyDB(checkpoint_dir, opt_copy);
 
+    if (db_stress_env->FileExists(checkpoint_dir).ok()) {
+      // If the directory might still exist, try to delete the files one by one.
+      // Likely a trash file is still there.
+      Status my_s = DestroyDir(db_stress_env, checkpoint_dir);
+      if (!my_s.ok()) {
+        fprintf(stderr, "Fail to destory directory before checkpoint: %s",
+                my_s.ToString().c_str());
+      }
+    }
+
     Checkpoint* checkpoint = nullptr;
     Status s = Checkpoint::Create(db_, &checkpoint);
     if (s.ok()) {
       s = checkpoint->CreateCheckpoint(checkpoint_dir);
+      if (!s.ok()) {
+        fprintf(stderr, "Fail to create checkpoint to %s\n",
+                checkpoint_dir.c_str());
+        std::vector<std::string> files;
+        Status my_s = db_stress_env->GetChildren(checkpoint_dir, &files);
+        if (my_s.ok()) {
+          for (const auto& f : files) {
+            fprintf(stderr, " %s\n", f.c_str());
+          }
+        } else {
+          fprintf(stderr, "Fail to get files under the directory to %s\n",
+                  my_s.ToString().c_str());
+        }
+      }
     }
     std::vector<ColumnFamilyHandle*> cf_handles;
     DB* checkpoint_db = nullptr;
@@ -331,10 +362,12 @@ class CfConsistencyStressTest : public StressTest {
       delete checkpoint_db;
       checkpoint_db = nullptr;
     }
-    DestroyDB(checkpoint_dir, opt_copy);
+
     if (!s.ok()) {
       fprintf(stderr, "A checkpoint operation failed with: %s\n",
               s.ToString().c_str());
+    } else {
+      DestroyDB(checkpoint_dir, opt_copy);
     }
     return s;
   }
@@ -573,5 +606,5 @@ StressTest* CreateCfConsistencyStressTest() {
   return new CfConsistencyStressTest();
 }
 
-}  // namespace rocksdb
+}  // namespace ROCKSDB_NAMESPACE
 #endif  // GFLAGS

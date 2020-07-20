@@ -19,7 +19,7 @@
 #include "options/cf_options.h"
 #include "rocksdb/compaction_filter.h"
 
-namespace rocksdb {
+namespace ROCKSDB_NAMESPACE {
 
 class CompactionIterator {
  public:
@@ -121,7 +121,8 @@ class CompactionIterator {
   void PrepareOutput();
 
   // Invoke compaction filter if needed.
-  void InvokeFilterIfNeeded(bool* need_skip, Slice* skip_until);
+  // Return true on success, false on failures (e.g.: kIOError).
+  bool InvokeFilterIfNeeded(bool* need_skip, Slice* skip_until);
 
   // Given a sequence number, return the sequence number of the
   // earliest snapshot that this sequence number is visible in.
@@ -237,4 +238,4 @@ class CompactionIterator {
            manual_compaction_paused_->load(std::memory_order_relaxed);
   }
 };
-}  // namespace rocksdb
+}  // namespace ROCKSDB_NAMESPACE

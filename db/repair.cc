@@ -83,7 +83,7 @@
 #include "table/scoped_arena_iterator.h"
 #include "util/string_util.h"
 
-namespace rocksdb {
+namespace ROCKSDB_NAMESPACE {
 
 namespace {
 
@@ -183,7 +183,9 @@ class Repairer {
       }
       // Just create a DBImpl temporarily so we can reuse NewDB()
       DBImpl* db_impl = new DBImpl(db_options_, dbname_);
-      status = db_impl->NewDB();
+      // Also use this temp DBImpl to get a session id
+      db_impl->GetDbSessionId(db_session_id_);
+      status = db_impl->NewDB(/*new_filenames=*/nullptr);
       delete db_impl;
     }
 
@@ -229,6 +231,7 @@ class Repairer {
   };
 
   std::string const dbname_;
+  std::string db_session_id_;
   Env* const env_;
   const EnvOptions env_options_;
   const DBOptions db_options_;
@@ -424,6 +427,7 @@ class Repairer {
       }
 
       LegacyFileSystemWrapper fs(env_);
+      IOStatus io_s;
       status = BuildTable(
           dbname_, env_, &fs, *cfd->ioptions(),
           *cfd->GetLatestMutableCFOptions(), env_options_, table_cache_,
@@ -432,9 +436,11 @@ class Repairer {
           cfd->GetID(), cfd->GetName(), {}, kMaxSequenceNumber,
           snapshot_checker, kNoCompression, 0 /* sample_for_compression */,
           CompressionOptions(), false, nullptr /* internal_stats */,
-          TableFileCreationReason::kRecovery, nullptr /* event_logger */,
+          TableFileCreationReason::kRecovery, &io_s, nullptr /* event_logger */,
           0 /* job_id */, Env::IO_HIGH, nullptr /* table_properties */,
-          -1 /* level */, current_time, write_hint);
+          -1 /* level */, current_time, 0 /* oldest_key_time */, write_hint,
+          0 /* file_creation_time */, "DB Repairer" /* db_id */,
+          db_session_id_);
       ROCKS_LOG_INFO(db_options_.info_log,
                      "Log #%" PRIu64 ": %d ops saved to Table #%" PRIu64 " %s",
                      log, counter, meta.fd.GetNumber(),
@@ -527,8 +533,10 @@ class Repairer {
           cfd->GetLatestMutableCFOptions()->prefix_extractor.get(),
           /*table_reader_ptr=*/nullptr, /*file_read_hist=*/nullptr,
           TableReaderCaller::kRepair, /*arena=*/nullptr, /*skip_filters=*/false,
-          /*level=*/-1, /*smallest_compaction_key=*/nullptr,
-          /*largest_compaction_key=*/nullptr);
+          /*level=*/-1, /*max_file_size_for_l0_meta_pin=*/0,
+          /*smallest_compaction_key=*/nullptr,
+          /*largest_compaction_key=*/nullptr,
+          /*allow_unprepared_value=*/false);
       ParsedInternalKey parsed;
       for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
         Slice key = iter->key();
@@ -586,7 +594,8 @@ class Repairer {
             table->meta.largest, table->meta.fd.smallest_seqno,
             table->meta.fd.largest_seqno, table->meta.marked_for_compaction,
             table->meta.oldest_blob_file_number,
-            table->meta.oldest_ancester_time, table->meta.file_creation_time);
+            table->meta.oldest_ancester_time, table->meta.file_creation_time,
+            table->meta.file_checksum, table->meta.file_checksum_func_name);
       }
       assert(next_file_number_ > 0);
       vset_.MarkFileNumberUsed(next_file_number_ - 1);
@@ -671,10 +680,6 @@ Status RepairDB(const std::string& dbname, const DBOptions& db_options,
 
 Status RepairDB(const std::string& dbname, const Options& options) {
   Options opts(options);
-  if (opts.file_system == nullptr) {
-    opts.file_system.reset(new LegacyFileSystemWrapper(opts.env));
-    ;
-  }
 
   DBOptions db_options(opts);
   ColumnFamilyOptions cf_options(opts);
@@ -685,6 +690,6 @@ Status RepairDB(const std::string& dbname, const Options& options) {
   return repairer.Run();
 }
 
-}  // namespace rocksdb
+}  // namespace ROCKSDB_NAMESPACE
 
 #endif  // ROCKSDB_LITE

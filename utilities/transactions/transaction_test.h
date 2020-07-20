@@ -12,26 +12,25 @@
 #include <thread>
 
 #include "db/db_impl/db_impl.h"
+#include "port/port.h"
 #include "rocksdb/db.h"
 #include "rocksdb/options.h"
 #include "rocksdb/utilities/transaction.h"
 #include "rocksdb/utilities/transaction_db.h"
 #include "table/mock_table.h"
-#include "test_util/fault_injection_test_env.h"
 #include "test_util/sync_point.h"
 #include "test_util/testharness.h"
 #include "test_util/testutil.h"
 #include "test_util/transaction_test_util.h"
 #include "util/random.h"
 #include "util/string_util.h"
+#include "utilities/fault_injection_env.h"
 #include "utilities/merge_operators.h"
 #include "utilities/merge_operators/string_append/stringappend.h"
 #include "utilities/transactions/pessimistic_transaction_db.h"
 #include "utilities/transactions/write_unprepared_txn_db.h"
 
-#include "port/port.h"
-
-namespace rocksdb {
+namespace ROCKSDB_NAMESPACE {
 
 // Return true if the ith bit is set in combination represented by comb
 bool IsInCombination(size_t i, size_t comb) { return comb & (size_t(1) << i); }
@@ -129,7 +128,7 @@ class TransactionTestBase : public ::testing::Test {
     } else {
       s = OpenWithStackableDB(cfs, handles);
     }
-    assert(db != nullptr);
+    assert(!s.ok() || db != nullptr);
     return s;
   }
 
@@ -437,7 +436,7 @@ class TransactionTestBase : public ::testing::Test {
     if (txn_db_options.write_policy == WRITE_COMMITTED) {
       options.unordered_write = false;
     }
-    auto db_impl = reinterpret_cast<DBImpl*>(db->GetRootDB());
+    auto db_impl = static_cast_with_check<DBImpl>(db->GetRootDB());
     // Before upgrade/downgrade the WAL must be emptied
     if (empty_wal) {
       db_impl->TEST_FlushMemTable();
@@ -453,7 +452,7 @@ class TransactionTestBase : public ::testing::Test {
       ASSERT_TRUE(s.IsNotSupported());
       return;
     }
-    db_impl = reinterpret_cast<DBImpl*>(db->GetRootDB());
+    db_impl = static_cast_with_check<DBImpl>(db->GetRootDB());
     // Check that WAL is empty
     VectorLogPtr log_files;
     db_impl->GetSortedWalFiles(log_files);
@@ -514,4 +513,4 @@ class MySQLStyleTransactionTest
   const bool with_slow_threads_;
 };
 
-}  // namespace rocksdb
+}  // namespace ROCKSDB_NAMESPACE

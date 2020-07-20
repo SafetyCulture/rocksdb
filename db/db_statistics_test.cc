@@ -9,8 +9,9 @@
 #include "monitoring/thread_status_util.h"
 #include "port/stack_trace.h"
 #include "rocksdb/statistics.h"
+#include "util/random.h"
 
-namespace rocksdb {
+namespace ROCKSDB_NAMESPACE {
 
 class DBStatisticsTest : public DBTestBase {
  public:
@@ -45,7 +46,7 @@ TEST_F(DBStatisticsTest, CompressionStatsTest) {
 
   Options options = CurrentOptions();
   options.compression = type;
-  options.statistics = rocksdb::CreateDBStatistics();
+  options.statistics = ROCKSDB_NAMESPACE::CreateDBStatistics();
   options.statistics->set_stats_level(StatsLevel::kExceptTimeForMutex);
   DestroyAndReopen(options);
 
@@ -55,7 +56,7 @@ TEST_F(DBStatisticsTest, CompressionStatsTest) {
   Random rnd(301);
   for (int i = 0; i < kNumKeysWritten; ++i) {
     // compressible string
-    ASSERT_OK(Put(Key(i), RandomString(&rnd, 128) + std::string(128, 'a')));
+    ASSERT_OK(Put(Key(i), rnd.RandomString(128) + std::string(128, 'a')));
   }
   ASSERT_OK(Flush());
   ASSERT_GT(options.statistics->getTickerCount(NUMBER_BLOCK_COMPRESSED), 0);
@@ -75,7 +76,7 @@ TEST_F(DBStatisticsTest, CompressionStatsTest) {
   // Check that compressions do not occur when turned off
   for (int i = 0; i < kNumKeysWritten; ++i) {
     // compressible string
-    ASSERT_OK(Put(Key(i), RandomString(&rnd, 128) + std::string(128, 'a')));
+    ASSERT_OK(Put(Key(i), rnd.RandomString(128) + std::string(128, 'a')));
   }
   ASSERT_OK(Flush());
   ASSERT_EQ(options.statistics->getTickerCount(NUMBER_BLOCK_COMPRESSED)
@@ -91,7 +92,7 @@ TEST_F(DBStatisticsTest, CompressionStatsTest) {
 TEST_F(DBStatisticsTest, MutexWaitStatsDisabledByDefault) {
   Options options = CurrentOptions();
   options.create_if_missing = true;
-  options.statistics = rocksdb::CreateDBStatistics();
+  options.statistics = ROCKSDB_NAMESPACE::CreateDBStatistics();
   CreateAndReopenWithCF({"pikachu"}, options);
   const uint64_t kMutexWaitDelay = 100;
   ThreadStatusUtil::TEST_SetStateDelay(ThreadStatus::STATE_MUTEX_WAIT,
@@ -104,7 +105,7 @@ TEST_F(DBStatisticsTest, MutexWaitStatsDisabledByDefault) {
 TEST_F(DBStatisticsTest, MutexWaitStats) {
   Options options = CurrentOptions();
   options.create_if_missing = true;
-  options.statistics = rocksdb::CreateDBStatistics();
+  options.statistics = ROCKSDB_NAMESPACE::CreateDBStatistics();
   options.statistics->set_stats_level(StatsLevel::kAll);
   CreateAndReopenWithCF({"pikachu"}, options);
   const uint64_t kMutexWaitDelay = 100;
@@ -118,7 +119,7 @@ TEST_F(DBStatisticsTest, MutexWaitStats) {
 TEST_F(DBStatisticsTest, ResetStats) {
   Options options = CurrentOptions();
   options.create_if_missing = true;
-  options.statistics = rocksdb::CreateDBStatistics();
+  options.statistics = ROCKSDB_NAMESPACE::CreateDBStatistics();
   DestroyAndReopen(options);
   for (int i = 0; i < 2; ++i) {
     // pick arbitrary ticker and histogram. On first iteration they're zero
@@ -140,10 +141,10 @@ TEST_F(DBStatisticsTest, ResetStats) {
   }
 }
 
-}  // namespace rocksdb
+}  // namespace ROCKSDB_NAMESPACE
 
 int main(int argc, char** argv) {
-  rocksdb::port::InstallStackTraceHandler();
+  ROCKSDB_NAMESPACE::port::InstallStackTraceHandler();
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

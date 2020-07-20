@@ -5,10 +5,14 @@
 
 package org.rocksdb;
 
-import java.util.*;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
-
 import org.rocksdb.util.Environment;
 
 /**
@@ -55,17 +59,20 @@ public class RocksDB extends RocksObject {
           if (compressionType.getLibraryName() != null) {
             System.loadLibrary(compressionType.getLibraryName());
           }
-        } catch (UnsatisfiedLinkError e) {
+        } catch (final UnsatisfiedLinkError e) {
           // since it may be optional, we ignore its loading failure here.
         }
       }
       try {
         NativeLibraryLoader.getInstance().loadLibrary(tmpDir);
-      } catch (IOException e) {
+      } catch (final IOException e) {
         libraryLoaded.set(LibraryState.NOT_LOADED);
         throw new RuntimeException("Unable to load the RocksDB shared library",
             e);
       }
+
+      final int encodedVersion = version();
+      version = Version.fromEncodedVersion(encodedVersion);
 
       libraryLoaded.set(LibraryState.LOADED);
       return;
@@ -103,7 +110,7 @@ public class RocksDB extends RocksObject {
             System.load(path + "/" + Environment.getSharedLibraryFileName(
                 compressionType.getLibraryName()));
             break;
-          } catch (UnsatisfiedLinkError e) {
+          } catch (final UnsatisfiedLinkError e) {
             // since they are optional, we ignore loading fails.
           }
         }
@@ -116,7 +123,7 @@ public class RocksDB extends RocksObject {
               Environment.getJniLibraryFileName("rocksdbjni"));
           success = true;
           break;
-        } catch (UnsatisfiedLinkError e) {
+        } catch (final UnsatisfiedLinkError e) {
           err = e;
         }
       }
@@ -124,6 +131,9 @@ public class RocksDB extends RocksObject {
         libraryLoaded.set(LibraryState.NOT_LOADED);
         throw err;
       }
+
+      final int encodedVersion = version();
+      version = Version.fromEncodedVersion(encodedVersion);
 
       libraryLoaded.set(LibraryState.LOADED);
       return;
@@ -136,6 +146,10 @@ public class RocksDB extends RocksObject {
         //ignore
       }
     }
+  }
+
+  public static Version rocksdbVersion() {
+    return version;
   }
 
   /**
@@ -413,6 +427,99 @@ public class RocksDB extends RocksObject {
 
     final long[] handles = openROnly(options.nativeHandle_, path, cfNames,
         cfOptionHandles);
+    final RocksDB db = new RocksDB(handles[0]);
+    db.storeOptionsInstance(options);
+
+    for (int i = 1; i < handles.length; i++) {
+      columnFamilyHandles.add(new ColumnFamilyHandle(db, handles[i]));
+    }
+
+    return db;
+  }
+
+  /**
+   * Open DB as secondary instance with only the default column family.
+   *
+   * The secondary instance can dynamically tail the MANIFEST of
+   * a primary that must have already been created. User can call
+   * {@link #tryCatchUpWithPrimary()} to make the secondary instance catch up
+   * with primary (WAL tailing is NOT supported now) whenever the user feels
+   * necessary. Column families created by the primary after the secondary
+   * instance starts are currently ignored by the secondary instance.
+   * Column families opened by secondary and dropped by the primary will be
+   * dropped by secondary as well. However the user of the secondary instance
+   * can still access the data of such dropped column family as long as they
+   * do not destroy the corresponding column family handle.
+   * WAL tailing is not supported at present, but will arrive soon.
+   *
+   * @param options the options to open the secondary instance.
+   * @param path the path to the primary RocksDB instance.
+   * @param secondaryPath points to a directory where the secondary instance
+   *    stores its info log
+   *
+   * @return a {@link RocksDB} instance on success, null if the specified
+   *     {@link RocksDB} can not be opened.
+   *
+   * @throws RocksDBException thrown if error happens in underlying
+   *    native library.
+   */
+  public static RocksDB openAsSecondary(final Options options, final String path,
+      final String secondaryPath) throws RocksDBException {
+    // when non-default Options is used, keeping an Options reference
+    // in RocksDB can prevent Java to GC during the life-time of
+    // the currently-created RocksDB.
+    final RocksDB db = new RocksDB(openAsSecondary(options.nativeHandle_, path, secondaryPath));
+    db.storeOptionsInstance(options);
+    return db;
+  }
+
+  /**
+   * Open DB as secondary instance with column families.
+   * You can open a subset of column families in secondary mode.
+   *
+   * The secondary instance can dynamically tail the MANIFEST of
+   * a primary that must have already been created. User can call
+   * {@link #tryCatchUpWithPrimary()} to make the secondary instance catch up
+   * with primary (WAL tailing is NOT supported now) whenever the user feels
+   * necessary. Column families created by the primary after the secondary
+   * instance starts are currently ignored by the secondary instance.
+   * Column families opened by secondary and dropped by the primary will be
+   * dropped by secondary as well. However the user of the secondary instance
+   * can still access the data of such dropped column family as long as they
+   * do not destroy the corresponding column family handle.
+   * WAL tailing is not supported at present, but will arrive soon.
+   *
+   * @param options the options to open the secondary instance.
+   * @param path the path to the primary RocksDB instance.
+   * @param secondaryPath points to a directory where the secondary instance
+   *    stores its info log.
+   * @param columnFamilyDescriptors list of column family descriptors
+   * @param columnFamilyHandles will be filled with ColumnFamilyHandle instances
+   *     on open.
+   *
+   * @return a {@link RocksDB} instance on success, null if the specified
+   *     {@link RocksDB} can not be opened.
+   *
+   * @throws RocksDBException thrown if error happens in underlying
+   *    native library.
+   */
+  public static RocksDB openAsSecondary(final DBOptions options, final String path,
+      final String secondaryPath, final List<ColumnFamilyDescriptor> columnFamilyDescriptors,
+      final List<ColumnFamilyHandle> columnFamilyHandles) throws RocksDBException {
+    // when non-default Options is used, keeping an Options reference
+    // in RocksDB can prevent Java to GC during the life-time of
+    // the currently-created RocksDB.
+
+    final byte[][] cfNames = new byte[columnFamilyDescriptors.size()][];
+    final long[] cfOptionHandles = new long[columnFamilyDescriptors.size()];
+    for (int i = 0; i < columnFamilyDescriptors.size(); i++) {
+      final ColumnFamilyDescriptor cfDescriptor = columnFamilyDescriptors.get(i);
+      cfNames[i] = cfDescriptor.getName();
+      cfOptionHandles[i] = cfDescriptor.getOptions().nativeHandle_;
+    }
+
+    final long[] handles =
+        openAsSecondary(options.nativeHandle_, path, secondaryPath, cfNames, cfOptionHandles);
     final RocksDB db = new RocksDB(handles[0]);
     db.storeOptionsInstance(options);
 
@@ -761,6 +868,57 @@ public class RocksDB extends RocksObject {
    * @param columnFamilyHandle {@link org.rocksdb.ColumnFamilyHandle}
    *     instance
    * @param writeOpts {@link org.rocksdb.WriteOptions} instance.
+   * @param key the specified key to be inserted. Position and limit is used.
+   *     Supports direct buffer only.
+   * @param value the value associated with the specified key. Position and limit is used.
+   *     Supports direct buffer only.
+   *
+   * throws IllegalArgumentException if column family is not present
+   *
+   * @throws RocksDBException thrown if error happens in underlying
+   *    native library.
+   * @see IllegalArgumentException
+   */
+  public void put(final ColumnFamilyHandle columnFamilyHandle, final WriteOptions writeOpts,
+      final ByteBuffer key, final ByteBuffer value) throws RocksDBException {
+    assert key.isDirect() && value.isDirect();
+    putDirect(nativeHandle_, writeOpts.nativeHandle_, key, key.position(), key.remaining(), value,
+        value.position(), value.remaining(), columnFamilyHandle.nativeHandle_);
+    key.position(key.limit());
+    value.position(value.limit());
+  }
+
+  /**
+   * Set the database entry for "key" to "value".
+   *
+   * @param writeOpts {@link org.rocksdb.WriteOptions} instance.
+   * @param key the specified key to be inserted. Position and limit is used.
+   *     Supports direct buffer only.
+   * @param value the value associated with the specified key. Position and limit is used.
+   *     Supports direct buffer only.
+   *
+   * throws IllegalArgumentException if column family is not present
+   *
+   * @throws RocksDBException thrown if error happens in underlying
+   *    native library.
+   * @see IllegalArgumentException
+   */
+  public void put(final WriteOptions writeOpts, final ByteBuffer key, final ByteBuffer value)
+      throws RocksDBException {
+    assert key.isDirect() && value.isDirect();
+    putDirect(nativeHandle_, writeOpts.nativeHandle_, key, key.position(), key.remaining(), value,
+        value.position(), value.remaining(), 0);
+    key.position(key.limit());
+    value.position(value.limit());
+  }
+
+  /**
+   * Set the database entry for "key" to "value" for the specified
+   * column family.
+   *
+   * @param columnFamilyHandle {@link org.rocksdb.ColumnFamilyHandle}
+   *     instance
+   * @param writeOpts {@link org.rocksdb.WriteOptions} instance.
    * @param key The specified key to be inserted
    * @param offset the offset of the "key" array to be used, must be
    *     non-negative and no larger than "key".length
@@ -1014,6 +1172,70 @@ public class RocksDB extends RocksObject {
       final int len)  throws RocksDBException {
     delete(nativeHandle_, writeOpt.nativeHandle_, key, offset, len,
         columnFamilyHandle.nativeHandle_);
+  }
+
+  /**
+   * Get the value associated with the specified key within column family.
+   *
+   * @param opt {@link org.rocksdb.ReadOptions} instance.
+   * @param key the key to retrieve the value. It is using position and limit.
+   *     Supports direct buffer only.
+   * @param value the out-value to receive the retrieved value.
+   *     It is using position and limit. Limit is set according to value size.
+   *     Supports direct buffer only.
+   * @return The size of the actual value that matches the specified
+   *     {@code key} in byte.  If the return value is greater than the
+   *     length of {@code value}, then it indicates that the size of the
+   *     input buffer {@code value} is insufficient and partial result will
+   *     be returned.  RocksDB.NOT_FOUND will be returned if the value not
+   *     found.
+   *
+   * @throws RocksDBException thrown if error happens in underlying
+   *    native library.
+   */
+  public int get(final ReadOptions opt, final ByteBuffer key, final ByteBuffer value)
+      throws RocksDBException {
+    assert key.isDirect() && value.isDirect();
+    int result = getDirect(nativeHandle_, opt.nativeHandle_, key, key.position(), key.remaining(),
+        value, value.position(), value.remaining(), 0);
+    if (result != NOT_FOUND) {
+      value.limit(Math.min(value.limit(), value.position() + result));
+    }
+    key.position(key.limit());
+    return result;
+  }
+
+  /**
+   * Get the value associated with the specified key within column family.
+   *
+   * @param columnFamilyHandle {@link org.rocksdb.ColumnFamilyHandle}
+   *     instance
+   * @param opt {@link org.rocksdb.ReadOptions} instance.
+   * @param key the key to retrieve the value. It is using position and limit.
+   *     Supports direct buffer only.
+   * @param value the out-value to receive the retrieved value.
+   *     It is using position and limit. Limit is set according to value size.
+   *     Supports direct buffer only.
+   * @return The size of the actual value that matches the specified
+   *     {@code key} in byte.  If the return value is greater than the
+   *     length of {@code value}, then it indicates that the size of the
+   *     input buffer {@code value} is insufficient and partial result will
+   *     be returned.  RocksDB.NOT_FOUND will be returned if the value not
+   *     found.
+   *
+   * @throws RocksDBException thrown if error happens in underlying
+   *    native library.
+   */
+  public int get(final ColumnFamilyHandle columnFamilyHandle, final ReadOptions opt,
+      final ByteBuffer key, final ByteBuffer value) throws RocksDBException {
+    assert key.isDirect() && value.isDirect();
+    int result = getDirect(nativeHandle_, opt.nativeHandle_, key, key.position(), key.remaining(),
+        value, value.position(), value.remaining(), columnFamilyHandle.nativeHandle_);
+    if (result != NOT_FOUND) {
+      value.limit(Math.min(value.limit(), value.position() + result));
+    }
+    key.position(key.limit());
+    return result;
   }
 
   /**
@@ -1358,6 +1580,46 @@ public class RocksDB extends RocksObject {
     checkBounds(vOffset, vLen, value.length);
     merge(nativeHandle_, writeOpts.nativeHandle_,
         key, offset, len, value, vOffset, vLen);
+  }
+
+  /**
+   * Delete the database entry (if any) for "key".  Returns OK on
+   * success, and a non-OK status on error.  It is not an error if "key"
+   * did not exist in the database.
+   *
+   * @param writeOpt WriteOptions to be used with delete operation
+   * @param key Key to delete within database. It is using position and limit.
+   *     Supports direct buffer only.
+   *
+   * @throws RocksDBException thrown if error happens in underlying
+   *    native library.
+   */
+  public void delete(final WriteOptions writeOpt, final ByteBuffer key) throws RocksDBException {
+    assert key.isDirect();
+    deleteDirect(nativeHandle_, writeOpt.nativeHandle_, key, key.position(), key.remaining(), 0);
+    key.position(key.limit());
+  }
+
+  /**
+   * Delete the database entry (if any) for "key".  Returns OK on
+   * success, and a non-OK status on error.  It is not an error if "key"
+   * did not exist in the database.
+   *
+   * @param columnFamilyHandle {@link org.rocksdb.ColumnFamilyHandle}
+   *     instance
+   * @param writeOpt WriteOptions to be used with delete operation
+   * @param key Key to delete within database. It is using position and limit.
+   *     Supports direct buffer only.
+   *
+   * @throws RocksDBException thrown if error happens in underlying
+   *    native library.
+   */
+  public void delete(final ColumnFamilyHandle columnFamilyHandle, final WriteOptions writeOpt,
+      final ByteBuffer key) throws RocksDBException {
+    assert key.isDirect();
+    deleteDirect(nativeHandle_, writeOpt.nativeHandle_, key, key.position(), key.remaining(),
+        columnFamilyHandle.nativeHandle_);
+    key.position(key.limit());
   }
 
   /**
@@ -3321,6 +3583,17 @@ public class RocksDB extends RocksObject {
   }
 
   /**
+   * This function will cancel all currently running background processes.
+   *
+   * @param wait if true, wait for all background work to be cancelled before
+   *   returning.
+   *
+   */
+  public void cancelAllBackgroundWork(boolean wait) {
+    cancelAllBackgroundWork(nativeHandle_, wait);
+  }
+
+  /**
    * This function will wait until all currently running background processes
    * finish. After it returns, no background process will be run until
    * {@link #continueBackgroundWork()} is called
@@ -3987,6 +4260,25 @@ public class RocksDB extends RocksObject {
   }
 
   /**
+   * Make the secondary instance catch up with the primary by tailing and
+   * replaying the MANIFEST and WAL of the primary.
+   * Column families created by the primary after the secondary instance starts
+   * will be ignored unless the secondary instance closes and restarts with the
+   * newly created column families.
+   * Column families that exist before secondary instance starts and dropped by
+   * the primary afterwards will be marked as dropped. However, as long as the
+   * secondary instance does not delete the corresponding column family
+   * handles, the data of the column family is still accessible to the
+   * secondary.
+   *
+   * @throws RocksDBException thrown if error happens in underlying
+   *     native library.
+   */
+  public void tryCatchUpWithPrimary() throws RocksDBException {
+    tryCatchUpWithPrimary(nativeHandle_);
+  }
+
+  /**
    * Delete files in multiple ranges at once.
    * Delete files in a lot of ranges one at a time can be slow, use this API for
    * better performance in that case.
@@ -4108,6 +4400,13 @@ public class RocksDB extends RocksObject {
       final String path, final byte[][] columnFamilyNames,
       final long[] columnFamilyOptions
   ) throws RocksDBException;
+
+  private native static long openAsSecondary(final long optionsHandle, final String path,
+      final String secondaryPath) throws RocksDBException;
+
+  private native static long[] openAsSecondary(final long optionsHandle, final String path,
+      final String secondaryPath, final byte[][] columnFamilyNames,
+      final long[] columnFamilyOptions) throws RocksDBException;
 
   @Override protected native void disposeInternal(final long handle);
 
@@ -4244,6 +4543,9 @@ public class RocksDB extends RocksObject {
   private native byte[][] keyMayExistFoundValue(
       final long handle, final long cfHandle, final long readOptHandle,
       final byte[] key, final int keyOffset, final int keyLength);
+  private native void putDirect(long handle, long writeOptHandle, ByteBuffer key, int keyOffset,
+      int keyLength, ByteBuffer value, int valueOffset, int valueLength, long cfHandle)
+      throws RocksDBException;
   private native long iterator(final long handle);
   private native long iterator(final long handle, final long readOptHandle);
   private native long iteratorCF(final long handle, final long cfHandle);
@@ -4261,6 +4563,11 @@ public class RocksDB extends RocksObject {
   private native Map<String, String> getMapProperty(final long nativeHandle,
       final long cfHandle, final String property, final int propertyLength)
       throws RocksDBException;
+  private native int getDirect(long handle, long readOptHandle, ByteBuffer key, int keyOffset,
+      int keyLength, ByteBuffer value, int valueOffset, int valueLength, long cfHandle)
+      throws RocksDBException;
+  private native void deleteDirect(long handle, long optHandle, ByteBuffer key, int keyOffset,
+      int keyLength, long cfHandle) throws RocksDBException;
   private native long getLongProperty(final long nativeHandle,
       final long cfHandle, final String property, final int propertyLength)
       throws RocksDBException;
@@ -4290,6 +4597,8 @@ public class RocksDB extends RocksObject {
       final int outputLevel,
       final int outputPathId,
       final long compactionJobInfoHandle) throws RocksDBException;
+  private native void cancelAllBackgroundWork(final long handle,
+      final boolean wait);
   private native void pauseBackgroundWork(final long handle)
       throws RocksDBException;
   private native void continueBackgroundWork(final long handle)
@@ -4345,11 +4654,54 @@ public class RocksDB extends RocksObject {
   private native void startTrace(final long handle, final long maxTraceFileSize,
       final long traceWriterHandle) throws RocksDBException;
   private native void endTrace(final long handle) throws RocksDBException;
+  private native void tryCatchUpWithPrimary(final long handle) throws RocksDBException;
   private native void deleteFilesInRanges(long handle, long cfHandle, final byte[][] ranges,
       boolean include_end) throws RocksDBException;
 
   private native static void destroyDB(final String path,
       final long optionsHandle) throws RocksDBException;
 
+  private native static int version();
+
   protected DBOptionsInterface options_;
+  private static Version version;
+
+  public static class Version {
+    private final byte major;
+    private final byte minor;
+    private final byte patch;
+
+    public Version(final byte major, final byte minor, final byte patch) {
+      this.major = major;
+      this.minor = minor;
+      this.patch = patch;
+    }
+
+    public int getMajor() {
+      return major;
+    }
+
+    public int getMinor() {
+      return minor;
+    }
+
+    public int getPatch() {
+      return patch;
+    }
+
+    @Override
+    public String toString() {
+      return getMajor() + "." + getMinor() + "." + getPatch();
+    }
+
+    private static Version fromEncodedVersion(int encodedVersion) {
+      final byte patch = (byte) (encodedVersion & 0xff);
+      encodedVersion >>= 8;
+      final byte minor = (byte) (encodedVersion & 0xff);
+      encodedVersion >>= 8;
+      final byte major = (byte) (encodedVersion & 0xff);
+
+      return new Version(major, minor, patch);
+    }
+  }
 }

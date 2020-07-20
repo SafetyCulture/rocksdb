@@ -13,12 +13,12 @@
 #include "db/db_test_util.h"
 #include "port/port.h"
 #include "port/stack_trace.h"
-#include "test_util/fault_injection_test_env.h"
 #include "test_util/sync_point.h"
 #include "util/cast_util.h"
 #include "util/mutexlock.h"
+#include "utilities/fault_injection_env.h"
 
-namespace rocksdb {
+namespace ROCKSDB_NAMESPACE {
 
 class DBFlushTest : public DBTestBase {
  public:
@@ -89,7 +89,7 @@ TEST_F(DBFlushTest, SyncFail) {
   CreateAndReopenWithCF({"pikachu"}, options);
   Put("key", "value");
   auto* cfd =
-      reinterpret_cast<ColumnFamilyHandleImpl*>(db_->DefaultColumnFamily())
+      static_cast_with_check<ColumnFamilyHandleImpl>(db_->DefaultColumnFamily())
           ->cfd();
   FlushOptions flush_options;
   flush_options.wait = false;
@@ -379,9 +379,9 @@ TEST_F(DBFlushTest, FireOnFlushCompletedAfterCommittedResult) {
       DBImpl* db_impl = static_cast_with_check<DBImpl>(db);
       InstrumentedMutex* mutex = db_impl->mutex();
       mutex->Lock();
-      auto* cfd =
-          reinterpret_cast<ColumnFamilyHandleImpl*>(db->DefaultColumnFamily())
-              ->cfd();
+      auto* cfd = static_cast_with_check<ColumnFamilyHandleImpl>(
+                      db->DefaultColumnFamily())
+                      ->cfd();
       ASSERT_LT(seq, cfd->imm()->current()->GetEarliestSequenceNumber());
       mutex->Unlock();
     }
@@ -499,13 +499,13 @@ TEST_P(DBAtomicFlushTest, AtomicFlushTriggeredByMemTableFull) {
   TEST_SYNC_POINT(
       "DBAtomicFlushTest::AtomicFlushTriggeredByMemTableFull:BeforeCheck");
   if (options.atomic_flush) {
-    for (size_t i = 0; i != num_cfs - 1; ++i) {
+    for (size_t i = 0; i + 1 != num_cfs; ++i) {
       auto cfh = static_cast<ColumnFamilyHandleImpl*>(handles_[i]);
       ASSERT_EQ(0, cfh->cfd()->imm()->NumNotFlushed());
       ASSERT_TRUE(cfh->cfd()->mem()->IsEmpty());
     }
   } else {
-    for (size_t i = 0; i != num_cfs - 1; ++i) {
+    for (size_t i = 0; i + 1 != num_cfs; ++i) {
       auto cfh = static_cast<ColumnFamilyHandleImpl*>(handles_[i]);
       ASSERT_EQ(0, cfh->cfd()->imm()->NumNotFlushed());
       ASSERT_FALSE(cfh->cfd()->mem()->IsEmpty());
@@ -741,15 +741,44 @@ TEST_P(DBAtomicFlushTest, CFDropRaceWithWaitForFlushMemTables) {
   SyncPoint::GetInstance()->DisableProcessing();
 }
 
+TEST_P(DBAtomicFlushTest, RollbackAfterFailToInstallResults) {
+  bool atomic_flush = GetParam();
+  if (!atomic_flush) {
+    return;
+  }
+  auto fault_injection_env = std::make_shared<FaultInjectionTestEnv>(env_);
+  Options options = CurrentOptions();
+  options.env = fault_injection_env.get();
+  options.create_if_missing = true;
+  options.atomic_flush = atomic_flush;
+  CreateAndReopenWithCF({"pikachu"}, options);
+  ASSERT_EQ(2, handles_.size());
+  for (size_t cf = 0; cf < handles_.size(); ++cf) {
+    ASSERT_OK(Put(static_cast<int>(cf), "a", "value"));
+  }
+  SyncPoint::GetInstance()->DisableProcessing();
+  SyncPoint::GetInstance()->ClearAllCallBacks();
+  SyncPoint::GetInstance()->SetCallBack(
+      "VersionSet::ProcessManifestWrites:BeforeWriteLastVersionEdit:0",
+      [&](void* /*arg*/) { fault_injection_env->SetFilesystemActive(false); });
+  SyncPoint::GetInstance()->EnableProcessing();
+  FlushOptions flush_opts;
+  Status s = db_->Flush(flush_opts, handles_);
+  ASSERT_NOK(s);
+  fault_injection_env->SetFilesystemActive(true);
+  Close();
+  SyncPoint::GetInstance()->ClearAllCallBacks();
+}
+
 INSTANTIATE_TEST_CASE_P(DBFlushDirectIOTest, DBFlushDirectIOTest,
                         testing::Bool());
 
 INSTANTIATE_TEST_CASE_P(DBAtomicFlushTest, DBAtomicFlushTest, testing::Bool());
 
-}  // namespace rocksdb
+}  // namespace ROCKSDB_NAMESPACE
 
 int main(int argc, char** argv) {
-  rocksdb::port::InstallStackTraceHandler();
+  ROCKSDB_NAMESPACE::port::InstallStackTraceHandler();
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

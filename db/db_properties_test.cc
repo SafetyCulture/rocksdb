@@ -22,7 +22,7 @@
 #include "util/random.h"
 #include "util/string_util.h"
 
-namespace rocksdb {
+namespace ROCKSDB_NAMESPACE {
 
 class DBPropertiesTest : public DBTestBase {
  public:
@@ -126,8 +126,8 @@ TEST_F(DBPropertiesTest, GetAggregatedIntPropertyTest) {
   Random rnd(301);
   for (auto* handle : handles_) {
     for (int i = 0; i < kKeyNum; ++i) {
-      db_->Put(WriteOptions(), handle, RandomString(&rnd, kKeySize),
-               RandomString(&rnd, kValueSize));
+      db_->Put(WriteOptions(), handle, rnd.RandomString(kKeySize),
+               rnd.RandomString(kValueSize));
     }
   }
 
@@ -346,18 +346,18 @@ TEST_F(DBPropertiesTest, AggregatedTableProperties) {
     Random rnd(5632);
     for (int table = 1; table <= kTableCount; ++table) {
       for (int i = 0; i < kPutsPerTable; ++i) {
-        db_->Put(WriteOptions(), RandomString(&rnd, kKeySize),
-                 RandomString(&rnd, kValueSize));
+        db_->Put(WriteOptions(), rnd.RandomString(kKeySize),
+                 rnd.RandomString(kValueSize));
       }
       for (int i = 0; i < kDeletionsPerTable; i++) {
-        db_->Delete(WriteOptions(), RandomString(&rnd, kKeySize));
+        db_->Delete(WriteOptions(), rnd.RandomString(kKeySize));
       }
       for (int i = 0; i < kMergeOperandsPerTable; i++) {
-        db_->Merge(WriteOptions(), RandomString(&rnd, kKeySize),
-                   RandomString(&rnd, kValueSize));
+        db_->Merge(WriteOptions(), rnd.RandomString(kKeySize),
+                   rnd.RandomString(kValueSize));
       }
       for (int i = 0; i < kRangeDeletionsPerTable; i++) {
-        std::string start = RandomString(&rnd, kKeySize);
+        std::string start = rnd.RandomString(kKeySize);
         std::string end = start;
         end.resize(kValueSize);
         db_->DeleteRange(WriteOptions(), db_->DefaultColumnFamily(), start, end);
@@ -391,16 +391,16 @@ TEST_F(DBPropertiesTest, ReadLatencyHistogramByLevel) {
   options.max_bytes_for_level_base = 4500 << 10;
   options.target_file_size_base = 98 << 10;
   options.max_write_buffer_number = 2;
-  options.statistics = rocksdb::CreateDBStatistics();
+  options.statistics = ROCKSDB_NAMESPACE::CreateDBStatistics();
   options.max_open_files = 11;  // Make sure no proloading of table readers
 
   // RocksDB sanitize max open files to at least 20. Modify it back.
-  rocksdb::SyncPoint::GetInstance()->SetCallBack(
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
       "SanitizeOptions::AfterChangeMaxOpenFiles", [&](void* arg) {
         int* max_open_files = static_cast<int*>(arg);
         *max_open_files = 11;
       });
-  rocksdb::SyncPoint::GetInstance()->EnableProcessing();
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
 
   BlockBasedTableOptions table_options;
   table_options.no_block_cache = true;
@@ -448,7 +448,7 @@ TEST_F(DBPropertiesTest, ReadLatencyHistogramByLevel) {
 
   // Reopen and issue iterating. See thee latency tracked
   ReopenWithColumnFamilies({"default", "pikachu"}, options);
-  rocksdb::SyncPoint::GetInstance()->DisableProcessing();
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
   ASSERT_TRUE(dbfull()->GetProperty("rocksdb.cf-file-histogram", &prop));
   ASSERT_EQ(std::string::npos, prop.find("** Level 0 read latency histogram"));
   ASSERT_EQ(std::string::npos, prop.find("** Level 1 read latency histogram"));
@@ -546,18 +546,18 @@ TEST_F(DBPropertiesTest, AggregatedTablePropertiesAtLevel) {
   TableProperties tp, sum_tp, expected_tp;
   for (int table = 1; table <= kTableCount; ++table) {
     for (int i = 0; i < kPutsPerTable; ++i) {
-      db_->Put(WriteOptions(), RandomString(&rnd, kKeySize),
-               RandomString(&rnd, kValueSize));
+      db_->Put(WriteOptions(), rnd.RandomString(kKeySize),
+               rnd.RandomString(kValueSize));
     }
     for (int i = 0; i < kDeletionsPerTable; i++) {
-      db_->Delete(WriteOptions(), RandomString(&rnd, kKeySize));
+      db_->Delete(WriteOptions(), rnd.RandomString(kKeySize));
     }
     for (int i = 0; i < kMergeOperandsPerTable; i++) {
-      db_->Merge(WriteOptions(), RandomString(&rnd, kKeySize),
-                 RandomString(&rnd, kValueSize));
+      db_->Merge(WriteOptions(), rnd.RandomString(kKeySize),
+                 rnd.RandomString(kValueSize));
     }
     for (int i = 0; i < kRangeDeletionsPerTable; i++) {
-      std::string start = RandomString(&rnd, kKeySize);
+      std::string start = rnd.RandomString(kKeySize);
       std::string end = start;
       end.resize(kValueSize);
       db_->DeleteRange(WriteOptions(), db_->DefaultColumnFamily(), start, end);
@@ -920,7 +920,7 @@ TEST_F(DBPropertiesTest, ApproximateMemoryUsage) {
   for (int r = 0; r < kNumRounds; ++r) {
     for (int f = 0; f < kFlushesPerRound; ++f) {
       for (int w = 0; w < kWritesPerFlush; ++w) {
-        Put(RandomString(&rnd, kKeySize), RandomString(&rnd, kValueSize));
+        Put(rnd.RandomString(kKeySize), rnd.RandomString(kValueSize));
       }
     }
     // Make sure that there is no flush between getting the two properties.
@@ -938,7 +938,7 @@ TEST_F(DBPropertiesTest, ApproximateMemoryUsage) {
     iters.push_back(db_->NewIterator(ReadOptions()));
     for (int f = 0; f < kFlushesPerRound; ++f) {
       for (int w = 0; w < kWritesPerFlush; ++w) {
-        Put(RandomString(&rnd, kKeySize), RandomString(&rnd, kValueSize));
+        Put(rnd.RandomString(kKeySize), rnd.RandomString(kValueSize));
       }
     }
     // Force flush to prevent flush from happening between getting the
@@ -1296,8 +1296,8 @@ TEST_F(DBPropertiesTest, TablePropertiesNeedCompactTest) {
 
   const int kMaxKey = 1000;
   for (int i = 0; i < kMaxKey; i++) {
-    ASSERT_OK(Put(Key(i), RandomString(&rnd, 102)));
-    ASSERT_OK(Put(Key(kMaxKey + i), RandomString(&rnd, 102)));
+    ASSERT_OK(Put(Key(i), rnd.RandomString(102)));
+    ASSERT_OK(Put(Key(kMaxKey + i), rnd.RandomString(102)));
   }
   Flush();
   dbfull()->TEST_WaitForCompact();
@@ -1702,10 +1702,10 @@ TEST_F(DBPropertiesTest, BlockCacheProperties) {
 }
 
 #endif  // ROCKSDB_LITE
-}  // namespace rocksdb
+}  // namespace ROCKSDB_NAMESPACE
 
 int main(int argc, char** argv) {
-  rocksdb::port::InstallStackTraceHandler();
+  ROCKSDB_NAMESPACE::port::InstallStackTraceHandler();
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

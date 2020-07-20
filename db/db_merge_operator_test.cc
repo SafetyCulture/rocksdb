@@ -9,10 +9,11 @@
 #include "db/forward_iterator.h"
 #include "port/stack_trace.h"
 #include "rocksdb/merge_operator.h"
+#include "util/random.h"
 #include "utilities/merge_operators.h"
 #include "utilities/merge_operators/string_append/stringappend2.h"
 
-namespace rocksdb {
+namespace ROCKSDB_NAMESPACE {
 
 class TestReadCallback : public ReadCallback {
  public:
@@ -242,7 +243,7 @@ TEST_P(MergeOperatorPinningTest, OperandsMultiBlocks) {
       std::string key = Key(key_id % 35);
       key_id++;
       for (int k = 0; k < kOperandsPerKeyPerFile; k++) {
-        std::string val = RandomString(&rnd, kOperandSize);
+        std::string val = rnd.RandomString(kOperandSize);
         ASSERT_OK(db_->Merge(WriteOptions(), key, val));
         if (true_data[key].size() == 0) {
           true_data[key] = val;
@@ -327,7 +328,7 @@ TEST_P(MergeOperatorPinningTest, EvictCacheBeforeMerge) {
   for (int i = 0; i < kNumOperands; i++) {
     for (int j = 0; j < kNumKeys; j++) {
       std::string k = Key(j);
-      std::string v = RandomString(&rnd, kOperandSize);
+      std::string v = rnd.RandomString(kOperandSize);
       ASSERT_OK(db_->Merge(WriteOptions(), k, v));
 
       true_data[k] = std::max(true_data[k], v);
@@ -418,8 +419,8 @@ TEST_P(MergeOperatorPinningTest, TailingIterator) {
     delete iter;
   };
 
-  rocksdb::port::Thread writer_thread(writer_func);
-  rocksdb::port::Thread reader_thread(reader_func);
+  ROCKSDB_NAMESPACE::port::Thread writer_thread(writer_func);
+  ROCKSDB_NAMESPACE::port::Thread reader_thread(reader_func);
 
   writer_thread.join();
   reader_thread.join();
@@ -456,19 +457,19 @@ TEST_F(DBMergeOperatorTest, TailingIteratorMemtableUnrefedBySomeoneElse) {
 
   bool pushed_first_operand = false;
   bool stepped_to_next_operand = false;
-  rocksdb::SyncPoint::GetInstance()->SetCallBack(
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
       "DBIter::MergeValuesNewToOld:PushedFirstOperand", [&](void*) {
         EXPECT_FALSE(pushed_first_operand);
         pushed_first_operand = true;
         db_->Flush(FlushOptions()); // Switch to SuperVersion B
       });
-  rocksdb::SyncPoint::GetInstance()->SetCallBack(
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
       "DBIter::MergeValuesNewToOld:SteppedToNextOperand", [&](void*) {
         EXPECT_FALSE(stepped_to_next_operand);
         stepped_to_next_operand = true;
         someone_else.reset(); // Unpin SuperVersion A
       });
-  rocksdb::SyncPoint::GetInstance()->EnableProcessing();
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
 
   ReadOptions ro;
   ro.tailing = true;
@@ -620,7 +621,7 @@ TEST_P(PerConfigMergeOperatorPinningTest, Randomized) {
   // kNumPutBefore keys will have base values
   for (int i = 0; i < kNumPutBefore; i++) {
     std::string key = Key(rnd.Next() % kKeyRange);
-    std::string value = RandomString(&rnd, kOperandSize);
+    std::string value = rnd.RandomString(kOperandSize);
     ASSERT_OK(db_->Put(WriteOptions(), key, value));
 
     true_data[key] = value;
@@ -629,7 +630,7 @@ TEST_P(PerConfigMergeOperatorPinningTest, Randomized) {
   // Do kTotalMerges merges
   for (int i = 0; i < kTotalMerges; i++) {
     std::string key = Key(rnd.Next() % kKeyRange);
-    std::string value = RandomString(&rnd, kOperandSize);
+    std::string value = rnd.RandomString(kOperandSize);
     ASSERT_OK(db_->Merge(WriteOptions(), key, value));
 
     if (true_data[key] < value) {
@@ -640,7 +641,7 @@ TEST_P(PerConfigMergeOperatorPinningTest, Randomized) {
   // Overwrite random kNumPutAfter keys
   for (int i = 0; i < kNumPutAfter; i++) {
     std::string key = Key(rnd.Next() % kKeyRange);
-    std::string value = RandomString(&rnd, kOperandSize);
+    std::string value = rnd.RandomString(kOperandSize);
     ASSERT_OK(db_->Put(WriteOptions(), key, value));
 
     true_data[key] = value;
@@ -657,10 +658,10 @@ TEST_P(PerConfigMergeOperatorPinningTest, Randomized) {
   VerifyDBFromMap(true_data);
 }
 
-}  // namespace rocksdb
+}  // namespace ROCKSDB_NAMESPACE
 
 int main(int argc, char** argv) {
-  rocksdb::port::InstallStackTraceHandler();
+  ROCKSDB_NAMESPACE::port::InstallStackTraceHandler();
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
